@@ -7,13 +7,15 @@ import io.circe._, io.circe.syntax._
 //import io.circe.generic.auto._ //this will break the compiler resulting in : could not find Lazy implicit value of type io.circe.generic.encoding.DerivedObjectEncoder
 import io.circe.yaml._, io.circe.yaml.syntax._
 
-case class MigratorConfig(source: SourceSettings,
-                          target: TargetSettings,
-                          preserveTimestamps: Boolean,
-                          renames: List[Rename],
-                          savepoints: Savepoints,
-                          skipTokenRanges: Set[(Token[_], Token[_])],
-                          validation: Validation) {
+case class MigratorConfig(
+  source: SourceSettings,
+  target: TargetSettings,
+  preserveTimestamps: Boolean,
+  renames: List[Rename],
+  savepoints: Savepoints,
+  skipTokenRanges: Set[(Token[_], Token[_])],
+  validation: Validation
+) {
   def render: String = this.asJson.asYaml.spaces2
 }
 object MigratorConfig {
@@ -53,25 +55,41 @@ object Credentials {
   implicit val decoder: Decoder[Credentials] = deriveDecoder[Credentials]
 }
 
-case class SourceSettings(host: String,
-                          port: Int,
-                          credentials: Option[Credentials],
-                          keyspace: String,
-                          table: String,
-                          splitCount: Option[Int],
-                          connections: Option[Int],
-                          fetchSize: Int)
+case class SourceSettings(
+  host: String,
+  port: Int,
+  credentials: Option[Credentials],
+  sslEnable: Boolean,
+  trustStorePassword: Option[String],
+  trustStorePath: Option[String],
+  clientAuthEnabled: Boolean,
+  keyStorePath: Option[String],
+  keyStorePassword: Option[String],
+  keyspace: String,
+  table: String,
+  splitCount: Option[Int],
+  connections: Option[Int],
+  fetchSize: Int
+)
 object SourceSettings {
   implicit val encoder: Encoder[SourceSettings] = deriveEncoder[SourceSettings]
   implicit val decoder: Decoder[SourceSettings] = deriveDecoder[SourceSettings]
 }
 
-case class TargetSettings(host: String,
-                          port: Int,
-                          credentials: Option[Credentials],
-                          keyspace: String,
-                          table: String,
-                          connections: Option[Int])
+case class TargetSettings(
+  host: String,
+  port: Int,
+  credentials: Option[Credentials],
+  sslEnable: Boolean,
+  trustStorePassword: Option[String],
+  trustStorePath: Option[String],
+  clientAuthEnabled: Boolean,
+  keyStorePath: Option[String],
+  keyStorePassword: Option[String],
+  keyspace: String,
+  table: String,
+  connections: Option[Int]
+)
 object TargetSettings {
   implicit val encoder: Encoder[TargetSettings] = deriveEncoder[TargetSettings]
   implicit val decoder: Decoder[TargetSettings] = deriveDecoder[TargetSettings]
@@ -89,11 +107,13 @@ object Savepoints {
   implicit val decoder: Decoder[Savepoints] = deriveDecoder[Savepoints]
 }
 
-case class Validation(compareTimestamps: Boolean,
-                      ttlToleranceMillis: Long,
-                      writetimeToleranceMillis: Long,
-                      failuresToFetch: Int,
-                      floatingPointTolerance: Double)
+case class Validation(
+  compareTimestamps: Boolean,
+  ttlToleranceMillis: Long,
+  writetimeToleranceMillis: Long,
+  failuresToFetch: Int,
+  floatingPointTolerance: Double
+)
 object Validation {
   implicit val encoder: Encoder[Validation] = deriveEncoder[Validation]
   implicit val decoder: Decoder[Validation] = deriveDecoder[Validation]

@@ -1,21 +1,15 @@
 package com.scylladb.migrator
 
-import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql._
-import com.datastax.spark.connector.rdd.partitioner.dht.{ LongToken, Token }
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ScheduledThreadPoolExecutor
-
-import scala.util.control.NonFatal
 import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Paths }
 import java.util.concurrent.{ ScheduledThreadPoolExecutor, TimeUnit }
 
 import com.datastax.spark.connector._
+import com.datastax.spark.connector.cql.CassandraConnectorConf.CassandraSSLConf
 import com.datastax.spark.connector.cql._
 import com.datastax.spark.connector.rdd.ReadConf
-import com.datastax.spark.connector.rdd.partitioner.dht.LongToken
+import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.types.CassandraOption
 import com.datastax.spark.connector.writer._
 import org.apache.log4j.{ Level, LogManager, Logger }
@@ -42,6 +36,14 @@ object Connectors {
       CassandraConnectorConf(sparkConf).copy(
         hosts = Set(InetAddress.getByName(sourceSettings.host)),
         port  = sourceSettings.port,
+        cassandraSSLConf = CassandraSSLConf(
+          enabled            = sourceSettings.sslEnable,
+          trustStorePassword = sourceSettings.trustStorePassword,
+          trustStorePath     = sourceSettings.trustStorePath,
+          clientAuthEnabled  = sourceSettings.clientAuthEnabled,
+          keyStorePath       = sourceSettings.keyStorePath,
+          keyStorePassword   = sourceSettings.keyStorePassword
+        ),
         authConf = sourceSettings.credentials match {
           case None                                  => NoAuthConf
           case Some(Credentials(username, password)) => PasswordAuthConf(username, password)
@@ -56,6 +58,14 @@ object Connectors {
       CassandraConnectorConf(sparkConf).copy(
         hosts = Set(InetAddress.getByName(targetSettings.host)),
         port  = targetSettings.port,
+        cassandraSSLConf = CassandraSSLConf(
+          enabled            = targetSettings.sslEnable,
+          trustStorePassword = targetSettings.trustStorePassword,
+          trustStorePath     = targetSettings.trustStorePath,
+          clientAuthEnabled  = targetSettings.clientAuthEnabled,
+          keyStorePath       = targetSettings.keyStorePath,
+          keyStorePassword   = targetSettings.keyStorePassword
+        ),
         authConf = targetSettings.credentials match {
           case None                                  => NoAuthConf
           case Some(Credentials(username, password)) => PasswordAuthConf(username, password)
@@ -69,11 +79,14 @@ object Connectors {
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  def determineCopyType(tableDef: TableDef,
-                        preserveTimesRequest: Boolean): Either[Throwable, CopyType] =
+  def determineCopyType(
+    tableDef: TableDef,
+    preserveTimesRequest: Boolean
+  ): Either[Throwable, CopyType] =
     if (tableDef.columnTypes.exists(_.isCollection) && preserveTimesRequest)
       Left(
-        new Exception("TTL/Writetime preservation is unsupported for tables with collection types"))
+        new Exception("TTL/Writetime preservation is unsupported for tables with collection types")
+      )
     else if (preserveTimesRequest && tableDef.regularColumns.nonEmpty)
       Right(CopyType.WithTimestampPreservation)
     else if (preserveTimesRequest && tableDef.regularColumns.isEmpty) {
@@ -81,9 +94,11 @@ object Migrator {
       Right(CopyType.NoTimestampPreservation)
     } else Right(CopyType.NoTimestampPreservation)
 
-  def createSelection(tableDef: TableDef,
-                      origSchema: StructType,
-                      preserveTimes: Boolean): Either[Throwable, Selection] =
+  def createSelection(
+    tableDef: TableDef,
+    origSchema: StructType,
+    preserveTimes: Boolean
+  ): Either[Throwable, Selection] =
     determineCopyType(tableDef, preserveTimes).right map {
       case CopyType.WithTimestampPreservation =>
         val columnRefs =
@@ -109,7 +124,8 @@ object Migrator {
                     List(
                       origField,
                       StructField(s"${origField.name}_ttl", LongType, true),
-                      StructField(s"${origField.name}_writetime", LongType, true))
+                      StructField(s"${origField.name}_writetime", LongType, true)
+                    )
                   else List(origField)
         } yield field)
 
@@ -134,10 +150,14 @@ object Migrator {
         Selection(columnRefs, origSchema, CopyType.NoTimestampPreservation)
     }
 
-  def readDataframe(source: SourceSettings,
-                    preserveTimes: Boolean,
-                    tokenRangesToSkip: Set[(Token[_], Token[_])])(
-    implicit spark: SparkSession): (StructType, TableDef, DataFrame, CopyType) = {
+  def readDataframe(
+    source: SourceSettings,
+    preserveTimes: Boolean,
+    tokenRangesToSkip: Set[(Token[_], Token[_])]
+  )(
+    implicit
+    spark: SparkSession
+  ): (StructType, TableDef, DataFrame, CopyType) = {
     val connector = Connectors.sourceConnector(spark.sparkContext.getConf, source)
     val readConf = ReadConf
       .fromSparkConf(spark.sparkContext.getConf)
@@ -161,7 +181,8 @@ object Migrator {
       .cassandraTable[CassandraSQLRow](
         source.keyspace,
         source.table,
-        (s, e) => !tokenRangesToSkip.contains((s, e)))
+        (s, e) => !tokenRangesToSkip.contains((s, e))
+      )
       .withConnector(connector)
       .withReadConf(readConf)
       .select(selection.columnRefs: _*)
@@ -173,13 +194,16 @@ object Migrator {
       origSchema,
       tableDef,
       spark.createDataset(rdd)(RowEncoder(selection.schema)),
-      selection.copyType)
+      selection.copyType
+    )
   }
 
-  def explodeRow(row: Row,
-                 schema: StructType,
-                 primaryKeyOrdinals: Map[String, Int],
-                 regularKeyOrdinals: Map[String, (Int, Int, Int)]) =
+  def explodeRow(
+    row: Row,
+    schema: StructType,
+    primaryKeyOrdinals: Map[String, Int],
+    regularKeyOrdinals: Map[String, (Int, Int, Int)]
+  ) =
     if (regularKeyOrdinals.isEmpty) List(row)
     else
       regularKeyOrdinals
@@ -193,7 +217,9 @@ object Migrator {
                 else CassandraOption.Value(row.get(ordinal)),
                 if (row.isNullAt(ttlOrdinal)) None
                 else Some(row.getLong(ttlOrdinal)),
-                row.getLong(writetimeOrdinal)))
+                row.getLong(writetimeOrdinal)
+              )
+            )
 
           case _ =>
             None
@@ -221,9 +247,11 @@ object Migrator {
             Row(newValues: _*)
         }
 
-  def indexFields(currentFieldNames: List[String],
-                  origFieldNames: List[String],
-                  tableDef: TableDef) = {
+  def indexFields(
+    currentFieldNames: List[String],
+    origFieldNames: List[String],
+    tableDef: TableDef
+  ) = {
     val fieldIndices = currentFieldNames.zipWithIndex.toMap
     val primaryKeyIndices =
       (for {
@@ -251,7 +279,8 @@ object Migrator {
     origSchema: StructType,
     tableDef: TableDef,
     copyType: CopyType,
-    tokenRangeAccumulator: TokenRangeAccumulator)(implicit spark: SparkSession): Unit = {
+    tokenRangeAccumulator: TokenRangeAccumulator
+  )(implicit spark: SparkSession): Unit = {
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
     val writeConf = WriteConf.fromSparkConf(spark.sparkContext.getConf)
 
@@ -260,7 +289,8 @@ object Migrator {
         val (primaryKeyOrdinals, regularKeyOrdinals) = indexFields(
           df.schema.fields.map(_.name).toList,
           origSchema.fields.map(_.name).toList,
-          tableDef)
+          tableDef
+        )
 
         val broadcastPrimaryKeyOrdinals = spark.sparkContext.broadcast(primaryKeyOrdinals)
         val broadcastRegularKeyOrdinals = spark.sparkContext.broadcast(regularKeyOrdinals)
@@ -278,7 +308,8 @@ object Migrator {
             _,
             broadcastSchema.value,
             broadcastPrimaryKeyOrdinals.value,
-            broadcastRegularKeyOrdinals.value)
+            broadcastRegularKeyOrdinals.value
+          )
         }(RowEncoder(finalSchema))
       case CopyType.NoTimestampPreservation => df
     }
@@ -302,7 +333,8 @@ object Migrator {
       SomeColumns(
         renamedSchema.fields
           .map(x => x.name: ColumnRef)
-          .filterNot(ref => ref.columnName == "ttl" || ref.columnName == "writetime"): _*),
+          .filterNot(ref => ref.columnName == "ttl" || ref.columnName == "writetime"): _*
+      ),
       copyType match {
         case CopyType.WithTimestampPreservation =>
           writeConf.copy(
@@ -326,8 +358,8 @@ object Migrator {
 
     Logger.getRootLogger.setLevel(Level.WARN)
     log.setLevel(Level.INFO)
-    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.INFO)
-    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.INFO)
+    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.ERROR)
+    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.ERROR)
 
     val migratorConfig =
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
@@ -338,7 +370,8 @@ object Migrator {
       readDataframe(
         migratorConfig.source,
         migratorConfig.preserveTimestamps,
-        migratorConfig.skipTokenRanges)
+        migratorConfig.skipTokenRanges
+      )
 
     log.info("Created source dataframe; resulting schema:")
     sourceDF.printSchema()
@@ -361,12 +394,14 @@ object Migrator {
         origSchema,
         tableDef,
         copyType,
-        tokenRangeAccumulator)
+        tokenRangeAccumulator
+      )
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(
           "Caught error while writing the DataFrame. Will create a savepoint before exiting",
-          e)
+          e
+        )
     } finally {
       dumpAccumulatorState(migratorConfig, tokenRangeAccumulator, "final")
       scheduler.shutdown()
@@ -377,9 +412,11 @@ object Migrator {
   def savepointFilename(path: String): String =
     s"${path}/savepoint_${System.currentTimeMillis / 1000}.yaml"
 
-  def dumpAccumulatorState(config: MigratorConfig,
-                           accumulator: TokenRangeAccumulator,
-                           reason: String): Unit = {
+  def dumpAccumulatorState(
+    config: MigratorConfig,
+    accumulator: TokenRangeAccumulator,
+    reason: String
+  ): Unit = {
     val filename =
       Paths.get(savepointFilename(config.savepoints.path)).normalize
     val rangesToSkip = accumulator.value.get.map(range =>
@@ -392,12 +429,15 @@ object Migrator {
     Files.write(filename, modifiedConfig.render.getBytes(StandardCharsets.UTF_8))
 
     log.info(
-      s"Created a savepoint config at ${filename} due to ${reason}. Ranges added: ${rangesToSkip}")
+      s"Created a savepoint config at ${filename} due to ${reason}. Ranges added: ${rangesToSkip}"
+    )
   }
 
-  def startSavepointSchedule(svc: ScheduledThreadPoolExecutor,
-                             config: MigratorConfig,
-                             acc: TokenRangeAccumulator): Unit = {
+  def startSavepointSchedule(
+    svc: ScheduledThreadPoolExecutor,
+    config: MigratorConfig,
+    acc: TokenRangeAccumulator
+  ): Unit = {
     val runnable = new Runnable {
       override def run(): Unit =
         try dumpAccumulatorState(config, acc, "schedule")
@@ -408,14 +448,16 @@ object Migrator {
     }
 
     log.info(
-      s"Starting savepoint schedule; will write a savepoint every ${config.savepoints.intervalSeconds} seconds")
+      s"Starting savepoint schedule; will write a savepoint every ${config.savepoints.intervalSeconds} seconds"
+    )
 
     svc.scheduleAtFixedRate(runnable, 0, config.savepoints.intervalSeconds, TimeUnit.SECONDS)
   }
 
   def addUSR2Handler(config: MigratorConfig, acc: TokenRangeAccumulator) = {
     log.info(
-      "Installing SIGINT/TERM/USR2 handler. Send this to dump the current progress to a savepoint.")
+      "Installing SIGINT/TERM/USR2 handler. Send this to dump the current progress to a savepoint."
+    )
 
     val handler = new SignalHandler {
       override def handle(signal: Signal): Unit =
