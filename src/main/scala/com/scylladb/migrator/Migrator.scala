@@ -153,7 +153,8 @@ object Migrator {
   def readDataframe(
     source: SourceSettings,
     preserveTimes: Boolean,
-    tokenRangesToSkip: Set[(Token[_], Token[_])]
+    tokenRangesToSkip: Set[(Token[_], Token[_])],
+    tableName: String
   )(
     implicit
     spark: SparkSession
@@ -167,7 +168,7 @@ object Migrator {
       )
 
     val tableDef =
-      Schema.tableFromCassandra(connector, source.keyspace, source.table)
+      Schema.tableFromCassandra(connector, source.keyspace, tableName)
     log.info("TableDef retrieved for source:")
     log.info(tableDef)
 
@@ -180,7 +181,7 @@ object Migrator {
     val rdd = spark.sparkContext
       .cassandraTable[CassandraSQLRow](
         source.keyspace,
-        source.table,
+        tableName,
         (s, e) => !tokenRangesToSkip.contains((s, e))
       )
       .withConnector(connector)
@@ -279,7 +280,8 @@ object Migrator {
     origSchema: StructType,
     tableDef: TableDef,
     copyType: CopyType,
-    tokenRangeAccumulator: TokenRangeAccumulator
+    tokenRangeAccumulator: TokenRangeAccumulator,
+    tableName: String
   )(implicit spark: SparkSession): Unit = {
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
     val writeConf = WriteConf.fromSparkConf(spark.sparkContext.getConf)
@@ -329,7 +331,7 @@ object Migrator {
 
     transformedDF.rdd.saveToCassandra(
       target.keyspace,
-      target.table,
+      tableName,
       SomeColumns(
         renamedSchema.fields
           .map(x => x.name: ColumnRef)
@@ -365,18 +367,9 @@ object Migrator {
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
 
     log.info(s"Loaded config: ${migratorConfig}")
-
-    val (origSchema, tableDef, sourceDF, copyType) =
-      readDataframe(
-        migratorConfig.source,
-        migratorConfig.preserveTimestamps,
-        migratorConfig.skipTokenRanges
-      )
-
-    log.info("Created source dataframe; resulting schema:")
-    sourceDF.printSchema()
-
-    log.info("Starting write...")
+    val sourceTables = migratorConfig.source.table.split(",").map(_.trim)
+    val targetTables = migratorConfig.target.table.split(",").map(_.trim)
+    val sourceToTargetTables = sourceTables.zip(targetTables)
 
     val tokenRangeAccumulator = TokenRangeAccumulator.empty
     spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
@@ -387,15 +380,31 @@ object Migrator {
     startSavepointSchedule(scheduler, migratorConfig, tokenRangeAccumulator)
 
     try {
-      writeDataframe(
-        migratorConfig.target,
-        migratorConfig.renames,
-        sourceDF,
-        origSchema,
-        tableDef,
-        copyType,
-        tokenRangeAccumulator
-      )
+      sourceToTargetTables.foreach {
+        case (sourceTable, targetTable) =>
+          log.info(s"Start to process table ${sourceTable}.")
+          val (origSchema, tableDef, sourceDF, copyType) =
+            readDataframe(
+              migratorConfig.source,
+              migratorConfig.preserveTimestamps,
+              migratorConfig.skipTokenRanges,
+              sourceTable
+            )
+          log.info("Created source dataframe; resulting schema:")
+          sourceDF.printSchema()
+          log.info("Starting write...")
+          writeDataframe(
+            migratorConfig.target,
+            migratorConfig.renames,
+            sourceDF,
+            origSchema,
+            tableDef,
+            copyType,
+            tokenRangeAccumulator,
+            targetTable
+          )
+          log.info(s"Done with table ${sourceTable}.")
+      }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(

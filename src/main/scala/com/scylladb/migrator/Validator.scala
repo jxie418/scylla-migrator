@@ -7,9 +7,11 @@ import com.google.common.math.DoubleMath
 import org.apache.log4j.{ Level, LogManager, Logger }
 import org.apache.spark.sql.SparkSession
 
-case class RowComparisonFailure(row: CassandraRow,
-                                other: Option[CassandraRow],
-                                items: List[RowComparisonFailure.Item]) {
+case class RowComparisonFailure(
+  row: CassandraRow,
+  other: Option[CassandraRow],
+  items: List[RowComparisonFailure.Item]
+) {
   override def toString: String =
     s"""
        |Row failure:
@@ -41,12 +43,14 @@ object RowComparisonFailure {
           .mkString(", ")}")
   }
 
-  def compareRows(left: CassandraRow,
-                  right: Option[CassandraRow],
-                  floatingPointTolerance: Double,
-                  ttlToleranceMillis: Long,
-                  writetimeToleranceMillis: Long,
-                  compareTimestamps: Boolean): Option[RowComparisonFailure] =
+  def compareRows(
+    left: CassandraRow,
+    right: Option[CassandraRow],
+    floatingPointTolerance: Double,
+    ttlToleranceMillis: Long,
+    writetimeToleranceMillis: Long,
+    compareTimestamps: Boolean
+  ): Option[RowComparisonFailure] =
     right match {
       case None => Some(RowComparisonFailure(left, right, List(Item.MissingTargetRow)))
       case Some(right) if left.columnValues.size != right.columnValues.size =>
@@ -154,8 +158,11 @@ object RowComparisonFailure {
 object Validator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  def runValidation(config: MigratorConfig)(
-    implicit spark: SparkSession): List[RowComparisonFailure] = {
+  def runValidation(config: MigratorConfig, sourceToTarget: (String, String))(
+    implicit
+    spark: SparkSession
+  ): List[RowComparisonFailure] = {
+    val (sourceTable, targetTable) = sourceToTarget
     val sourceConnector: CassandraConnector =
       Connectors.sourceConnector(spark.sparkContext.getConf, config.source)
     val targetConnector: CassandraConnector =
@@ -163,7 +170,7 @@ object Validator {
 
     val renameMap = config.renames.map(rename => rename.from -> rename.to).toMap
     val sourceTableDef =
-      Schema.tableFromCassandra(sourceConnector, config.source.keyspace, config.source.table)
+      Schema.tableFromCassandra(sourceConnector, config.source.keyspace, sourceTable)
 
     val source = {
       val regularColumnsProjection =
@@ -184,7 +191,7 @@ object Validator {
           .map(colDef => ColumnName(colDef.columnName, renameMap.get(colDef.columnName)))
 
       spark.sparkContext
-        .cassandraTable(config.source.keyspace, config.source.table)
+        .cassandraTable(config.source.keyspace, sourceTable)
         .withConnector(sourceConnector)
         .withReadConf(
           ReadConf
@@ -221,9 +228,10 @@ object Validator {
       source
         .leftJoinWithCassandraTable(
           config.target.keyspace,
-          config.target.table,
+          targetTable,
           SomeColumns(primaryKeyProjection ++ regularColumnsProjection: _*),
-          SomeColumns(joinKey: _*))
+          SomeColumns(joinKey: _*)
+        )
         .withConnector(targetConnector)
     }
 
@@ -254,15 +262,18 @@ object Validator {
 
     Logger.getRootLogger.setLevel(Level.WARN)
     log.setLevel(Level.INFO)
-    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.INFO)
-    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.INFO)
+    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.ERROR)
+    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.ERROR)
 
-    val migratorConfig =
-      MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
+    val migratorConfig = MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
 
     log.info(s"Loaded config: ${migratorConfig}")
+    val sourceTables = migratorConfig.source.table.split(",").map(_.trim)
+    val targetTables = migratorConfig.target.table.split(",").map(_.trim)
+    val sourceToTargetTables = sourceTables.zip(targetTables)
 
-    val failures = runValidation(migratorConfig)
+    val failures =
+      sourceToTargetTables.map(r => runValidation(migratorConfig, r)).reduce((a, b) => a ++ b)
 
     if (failures.isEmpty) log.info("No comparison failures found - enjoy your day!")
     else {
