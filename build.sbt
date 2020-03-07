@@ -19,19 +19,14 @@ lazy val root = (project in file(".")).
     scalafmtOnCompile := true,
 
     libraryDependencies ++= Seq(
-      "org.apache.spark" %% "spark-streaming" % "2.3.1" % "provided",
-      "org.apache.spark" %% "spark-sql" % "2.3.1" % "provided",
-
-      "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.8.0" exclude("joda-time", "joda-time"),
+      "org.apache.spark" %% "spark-streaming" % "2.4.5" % "provided",
+      "org.apache.spark" %% "spark-sql" % "2.4.5" % "provided",
 
       "org.yaml" % "snakeyaml" % "1.23",
       "io.circe" %% "circe-yaml" % "0.9.0",
       "io.circe" %% "circe-generic" % "0.9.0",
 
-      "commons-configuration" % "commons-configuration" % "1.10",
-
-      "org.scalatest" %% "scalatest" % "3.0.1" % "test",
-      "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
+      "commons-configuration" % "commons-configuration" % "1.10"
     ),
 
     assemblyShadeRules in assembly := Seq(
